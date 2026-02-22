@@ -7,6 +7,17 @@ Pi extension that exposes MCP through two tools:
 
 It also adds a `/mcp` command for status, enable/disable, reconnect, and auth setup.
 
+## Why?
+
+This was an experiment to see if there is an efficiency benefit of allowing a coding agent interface with
+MCP in a way that allows composition.  See [this blog post](https://lucumr.pocoo.org/2025/8/18/code-mcps/).
+
+The actual findings are that with how MCP works today, such efficiency gains are not useful.  On the other
+hand an MCP server that uses code internally can be very helpful.  See for
+instance an [example MCP server](github.com/mitsuhiko/google-workspace-mcp) that
+uses a JavaScript environment to call Google services.  That one actually performs as well as a similar
+skill does.
+
 ## Configuration files
 
 Loaded in merge order (later overrides earlier):
