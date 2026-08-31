@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { McpResource, McpTool, ServerEntry, Transport } from "./types.js";
@@ -28,8 +28,13 @@ export class McpServerManager {
 
 		const existing = this.connections.get(name);
 		if (existing?.status === "connected") {
-			existing.lastUsedAt = Date.now();
-			return existing;
+			if (isTransportAlive(existing.transport)) {
+				existing.lastUsedAt = Date.now();
+				return existing;
+			}
+			this.handleConnectionClosed(name, existing);
+			await existing.client.close().catch(() => {});
+			await existing.transport.close().catch(() => {});
 		}
 
 		const promise = this.createConnection(name, definition);
@@ -53,7 +58,7 @@ export class McpServerManager {
 			let command = definition.command;
 			let args = definition.args ?? [];
 
-			if (command === "npx" || command === "npm") {
+			if (definition.resolveNpx !== false && (command === "npx" || command === "npm")) {
 				const resolved = await resolveNpxBinary(command, args);
 				if (resolved) {
 					command = resolved.isJs ? "node" : resolved.binPath;
@@ -79,7 +84,7 @@ export class McpServerManager {
 
 			const [tools, resources] = await Promise.all([this.fetchAllTools(client), this.fetchAllResources(client)]);
 
-			return {
+			const connection: ServerConnection = {
 				client,
 				transport,
 				definition,
@@ -89,6 +94,8 @@ export class McpServerManager {
 				inFlight: 0,
 				status: "connected",
 			};
+			client.onclose = () => this.handleConnectionClosed(name, connection);
+			return connection;
 		} catch (error) {
 			await client.close().catch(() => {});
 			await transport.close().catch(() => {});
@@ -169,6 +176,13 @@ export class McpServerManager {
 		return this.connections.get(name);
 	}
 
+	private handleConnectionClosed(name: string, closed: ServerConnection): void {
+		closed.status = "closed";
+		if (this.connections.get(name) === closed) {
+			this.connections.delete(name);
+		}
+	}
+
 	getAllConnections(): Map<string, ServerConnection> {
 		return new Map(this.connections);
 	}
@@ -231,11 +245,10 @@ function shouldFallbackToSse(error: unknown): boolean {
 }
 
 function resolveEnv(env?: Record<string, string>): Record<string, string> {
-	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(process.env)) {
-		if (value !== undefined) {
-			resolved[key] = value;
-		}
+	const resolved = getDefaultEnvironment();
+	for (const key of ["NONO_CAP_FILE", "NONO_TOOL_SANDBOX_SHIM_DIR", "NONO_TOOL_SANDBOX_SOCKET"] as const) {
+		const value = process.env[key];
+		if (value !== undefined) resolved[key] = value;
 	}
 
 	if (!env) return resolved;
@@ -246,6 +259,18 @@ function resolveEnv(env?: Record<string, string>): Record<string, string> {
 			.replace(/\$env:(\w+)/g, (_, name: string) => process.env[name] ?? "");
 	}
 	return resolved;
+}
+
+function isTransportAlive(transport: Transport): boolean {
+	if (!(transport instanceof StdioClientTransport)) return true;
+	const pid = transport.pid;
+	if (pid === null) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function resolveHeaders(headers?: Record<string, string>): Record<string, string> | undefined {

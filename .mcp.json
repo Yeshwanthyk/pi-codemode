@@ -2,11 +2,16 @@
   "mcpServers": {
     "sentry": {
       "command": "npx",
+      "resolveNpx": false,
       "args": [
         "-y",
         "mcp-remote@latest",
         "https://mcp.sentry.dev/mcp"
       ]
+    },
+    "linear": {
+      "url": "https://mcp.linear.app/mcp",
+      "auth": "oauth"
     },
     "github": {
       "type": "http",

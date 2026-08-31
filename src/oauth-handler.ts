@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { homedir } from "node:os";
 import type { OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { getPiAgentDir } from "./paths.js";
 
 export function getTokensPath(serverName: string): string {
-	return join(homedir(), ".pi", "agent", "mcp-oauth", serverName, "tokens.json");
+	return join(getPiAgentDir(), "mcp-oauth", serverName, "tokens.json");
 }
 
 export function getStoredTokens(serverName: string): OAuthTokens | undefined {

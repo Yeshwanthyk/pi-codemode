@@ -12,6 +12,7 @@ export interface McpTool {
 	title?: string;
 	description?: string;
 	inputSchema?: unknown;
+	outputSchema?: unknown;
 }
 
 export interface McpResource {
@@ -39,6 +40,8 @@ export interface McpContent {
 export interface ServerEntry {
 	command?: string;
 	args?: string[];
+	/** Keep the declared launcher intact so a Nono command policy can broker it. */
+	resolveNpx?: boolean;
 	env?: Record<string, string>;
 	cwd?: string;
 	url?: string;
@@ -54,6 +57,7 @@ export interface ServerEntry {
 	idleTimeout?: number;
 	exposeResources?: boolean;
 	debug?: boolean;
+	approval?: "never" | "always";
 }
 
 export interface McpSettings {
@@ -71,5 +75,6 @@ export interface ToolIndexEntry {
 	name: string;
 	description: string;
 	inputSchema?: unknown;
+	outputSchema?: unknown;
 	resourceUri?: string;
 }

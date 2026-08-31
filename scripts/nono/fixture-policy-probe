@@ -1,0 +1,58 @@
+#!/bin/bash
+# TEST ONLY. This purpose-specific helper runs under the selected fixture command's
+# child sandbox through an `exec` intercept. It uses only bash builtins so every
+# filesystem and network result comes from that one child sandbox.
+set -u
+
+readonly ROOT="/Users/yesh/.pi/pi-codemode/scripts/nono/proof-data"
+readonly SERVER="${1:?expected alpha or beta}"
+readonly MODE="${2:---nono-proof}"
+readonly PROBE_PORT=39873
+
+case "$SERVER" in
+  alpha) readonly PEER="beta" ;;
+  beta) readonly PEER="alpha" ;;
+  *) printf 'invalid server: %s\n' "$SERVER" >&2; exit 64 ;;
+esac
+
+if [[ "$MODE" == "--nono-proof-output" ]]; then
+  # 32 KiB exceeds the profile's 16 KiB stdout ceiling.
+  chunk=0123456789abcdef
+  i=0
+  while (( i < 2048 )); do
+    printf '%s' "$chunk"
+    ((i += 1))
+  done
+  exit 0
+fi
+
+fail() {
+  printf 'FAIL %s: %s\n' "$SERVER" "$1" >&2
+  exit 1
+}
+
+line=
+IFS= read -r line < "$ROOT/$SERVER/allowed.txt" || fail 'own read grant denied'
+[[ "$line" == "$SERVER-only" ]] || fail 'own read returned unexpected data'
+
+if (IFS= read -r _ < "$ROOT/$PEER/allowed.txt") 2>/dev/null; then
+  fail 'peer read grant leaked across sandboxes'
+fi
+
+printf '%s\n' "$SERVER wrote here" > "$ROOT/$SERVER/output/probe.txt" || fail 'own write grant denied'
+if (printf 'cross-server write\n' > "$ROOT/$PEER/output/forbidden.txt") 2>/dev/null; then
+  fail 'peer write grant leaked across sandboxes'
+fi
+
+[[ -z "${AWS_SECRET_ACCESS_KEY+x}" ]] || fail 'credential environment variable was inherited: AWS_SECRET_ACCESS_KEY'
+[[ -z "${SENTRY_AUTH_TOKEN+x}" ]] || fail 'credential environment variable was inherited: SENTRY_AUTH_TOKEN'
+[[ -z "${MCP_TEST_CREDENTIAL+x}" ]] || fail 'credential environment variable was inherited: MCP_TEST_CREDENTIAL'
+
+# The proof driver starts a host listener on this port. A successful connect is
+# therefore a policy failure, not a connection-refused false positive.
+if (exec 3<>"/dev/tcp/127.0.0.1/$PROBE_PORT") 2>/dev/null; then
+  exec 3>&-
+  fail 'network connect escaped the child network deny'
+fi
+
+printf 'PASS %s own-fs=yes peer-fs=no network=no credentials=no\n' "$SERVER"

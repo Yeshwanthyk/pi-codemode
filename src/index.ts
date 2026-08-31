@@ -1,6 +1,7 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-import { Text } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { Effect } from "effect";
 import { auth, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
 	OAuthClientInformationMixed,
@@ -9,8 +10,8 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server as HttpServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { loadMcpConfig } from "./config.js";
 import { McpServerManager } from "./server-manager.js";
@@ -25,13 +26,18 @@ import {
 	serializeTools,
 	type ServerCacheEntry,
 } from "./metadata-cache.js";
-import { JavaScriptSandboxRuntime, formatSandboxError, formatSandboxValue } from "./sandbox-runtime.js";
+import { CodeMode } from "./codemode/index.js";
+import type { JsonSchema } from "./codemode/tool.js";
+import { buildMcpCodeModeTools, type McpClient, type McpToolRef } from "./mcp/codemode-adapter.js";
+import type { McpCallResult } from "./mcp/result-projector.js";
+import { createMcpAuthorizer } from "./mcp/authorization.js";
 import { getStoredTokens, getTokensPath, saveStoredTokens } from "./oauth-handler.js";
+import { getPiAgentDir } from "./paths.js";
 import type { McpConfig, McpContent, McpResource, McpTool, ServerEntry, ToolIndexEntry } from "./types.js";
 
 const FAILURE_BACKOFF_MS = 60 * 1000;
 const DEFAULT_INLINE_LIMIT = 20;
-const TOOL_POLICY_PATH = join(homedir(), ".pi", "agent", "mcp-tool-policies.json");
+const TOOL_POLICY_PATH = join(getPiAgentDir(), "mcp-tool-policies.json");
 const MCP_DEBUG = process.env.PI_MCP_DEBUG === "1";
 
 function debugWarn(...args: unknown[]): void {
@@ -57,7 +63,6 @@ interface McpExtensionState {
 	config: McpConfig;
 	toolIndex: Map<string, ToolIndexEntry[]>;
 	failureTracker: Map<string, number>;
-	runtime: JavaScriptSandboxRuntime;
 	toolPolicies: Map<string, ServerToolPolicy>;
 	ui?: ExtensionContext["ui"];
 }
@@ -195,249 +200,81 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 		state = null;
 	});
 
+	pi.on("before_agent_start", async (event) => {
+		const loaded = await ensureStateReady(state, initPromise);
+		if (!loaded) return;
+		state = loaded;
+		await hydrateAllMetadata(loaded, { refresh: false });
+		const snapshot = createCodeModeRuntime(loaded);
+		return {
+			systemPrompt: `${event.systemPrompt}\n\n# MCP Code Mode\n\n${snapshot.runtime.instructions()}`,
+		};
+	});
+
 	pi.registerTool({
-		name: "list_mcp_tools",
-		label: "List MCP Tools",
+		name: "mcp_execute",
+		label: "MCP Code Mode",
 		description:
-			"List available MCP tools across configured servers (only currently enabled tools). Each line includes a compact parameter signature (required fields marked with *). Shows the first 20 inline and writes the full list to a temp file when longer. Optional query supports case-insensitive matching; regex is supported via /pattern/flags.",
+			"Execute one restricted JavaScript program over the currently authorized MCP tool catalog. The program has no filesystem, process, module, timer, fetch, Pi, or ambient network APIs. Compose dependent operations with await and independent operations with Promise.all. Output is limited to 50KB, 100 MCP calls, and 30 seconds.",
+		promptSnippet: "Run confined JavaScript orchestration over authorized MCP tools",
+		promptGuidelines: [
+			"Use mcp_execute for MCP operations; MCP servers are available only through the Code Mode tools injected into the prompt.",
+		],
 		parameters: Type.Object({
-			query: Type.Optional(
-				Type.String({
-					description:
-						"Optional filter query. Plain text does case-insensitive search. Use /pattern/flags for regex (e.g. /screenshot|capture/i).",
-				}),
-			),
+			code: Type.String({
+				description: "Restricted JavaScript program. Return the final plain-data value with `return ...`.",
+			}),
 		}),
-		async execute(_toolCallId, params: { query?: string }): Promise<any> {
+		async execute(
+			_toolCallId,
+			params: { code: string },
+			signal: AbortSignal | undefined,
+			_onUpdate,
+			ctx,
+		): Promise<any> {
 			const loaded = await ensureStateReady(state, initPromise);
-			if (!loaded) {
-				return {
-					isError: true,
-					content: [{ type: "text" as const, text: "MCP is not initialized" }],
-					details: { error: "not_initialized" },
-				};
-			}
+			if (!loaded) throw new Error("MCP is not initialized");
 			state = loaded;
-
-			const unavailableServers = await hydrateAllMetadata(loaded, { refresh: false });
-			const allEntries = getAllEntries(loaded);
-			const matcher = buildQueryMatcher(params.query);
-			const filtered = allEntries.filter((entry) => isEntryEnabled(loaded, entry) && matcher(formatSearchText(entry)));
-
-			filtered.sort((a, b) => {
-				if (a.server !== b.server) return a.server.localeCompare(b.server);
-				if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
-				return a.name.localeCompare(b.name);
-			});
-
-			const inlineLimit = DEFAULT_INLINE_LIMIT;
-			const inline = filtered.slice(0, inlineLimit);
-			const lines = inline.map((entry) => formatInlineEntry(entry));
-
-			let overflowPath: string | undefined;
-			if (filtered.length > inlineLimit) {
-				overflowPath = writeOverflowFile(filtered, params.query);
-			}
-
-			const serversWithMatches = new Set(filtered.map((entry) => entry.server)).size;
-			const summaryParts = [`Found ${filtered.length} MCP entries across ${serversWithMatches} server(s).`];
-			if (params.query?.trim()) {
-				summaryParts.push(`Query: ${params.query.trim()}`);
-			}
-			if (unavailableServers.length > 0) {
-				summaryParts.push(`Unavailable while indexing: ${unavailableServers.join(", ")}`);
-			}
-
-			let text = `${summaryParts.join(" ")}\n\n`;
-			if (lines.length === 0) {
-				text += "(no matching tools)";
-			} else {
-				text += lines.join("\n");
-			}
-
-			if (overflowPath) {
-				text += `\n\n${filtered.length - inline.length} more entries written to ${overflowPath}`;
-				text += `\nUse grep/rg on that file for deeper discovery.`;
-			}
-
+			await hydrateAllMetadata(loaded, { refresh: false });
+			const snapshot = createCodeModeRuntime(loaded, signal, ctx);
+			const result = await Effect.runPromise(snapshot.runtime.execute(params.code), { signal });
 			return {
-				content: [{ type: "text" as const, text }],
+				content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
 				details: {
-					count: filtered.length,
-					shown: inline.length,
-					overflowPath,
-					unavailableServers,
-					query: params.query,
+					result,
+					calls: snapshot.metadata,
+					mappings: snapshot.mappings,
+					code: params.code,
 				},
 			};
 		},
 		renderCall(args, theme) {
-			let line = theme.fg("toolTitle", theme.bold("list_mcp_tools"));
-			if (args.query) {
-				line += ` ${theme.fg("muted", args.query)}`;
-			}
-			return new Text(line, 0, 0);
+			const lines = typeof args.code === "string" ? args.code.split("\n").length : 0;
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("mcp_execute"))} ${theme.fg("muted", `${lines} lines`)}`,
+				0,
+				0,
+			);
 		},
 		renderResult(result, { expanded }, theme) {
 			const details = (result.details ?? {}) as {
-				count?: number;
-				shown?: number;
-				overflowPath?: string;
-				unavailableServers?: string[];
-				error?: string;
-			};
-
-			if (details.error) {
-				return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-			}
-
-			if (expanded) {
-				return new Text(extractTextFromResult(result), 0, 0);
-			}
-
-			const count = details.count ?? 0;
-			const shown = details.shown ?? 0;
-			let text = theme.fg("success", "✓ ") + theme.fg("muted", `${count} tool entries matched`);
-			if (count > shown) {
-				text += "\n" + theme.fg("dim", `${count - shown} overflowed to temp file`);
-			}
-			if (details.overflowPath) {
-				text += "\n" + theme.fg("dim", details.overflowPath);
-			}
-			if (details.unavailableServers && details.unavailableServers.length > 0) {
-				text += "\n" + theme.fg("warning", `Unavailable: ${details.unavailableServers.join(", ")}`);
-			}
-			return new Text(text, 0, 0);
-		},
-	});
-
-	pi.registerTool({
-		name: "call_mcp",
-		label: "Call MCP (code sandbox)",
-		description:
-			"Execute JavaScript in a sandbox with access to configured MCP servers. Respects MCP tool policy from /mcp. Prefer one script per user request: compose multiple MCP operations in a single block and use Promise.all for independent calls. Avoid many tiny sequential call_mcp invocations unless each step depends on previous output. Available bindings: call(server, tool, args), readResource(server, uri), listTools(query), servers, tools, resources, state.",
-		parameters: Type.Object({
-			code: Type.String({
-				description:
-					"JavaScript async function body. Return a value with `return ...`. Prefer batching: include all needed MCP calls in one script, and use Promise.all for independent fan-out (for example fetching DSNs for all projects). Use call(server, tool, args) to invoke MCP tools.",
-			}),
-			timeoutMs: Type.Optional(
-				Type.Number({
-					description: "Execution timeout in milliseconds (default 30000, max 300000)",
-					minimum: 100,
-					maximum: 300000,
-				}),
-			),
-			resetState: Type.Optional(
-				Type.Boolean({ description: "Reset persistent state object before executing the script" }),
-			),
-		}),
-		async execute(
-			_toolCallId,
-			params: { code: string; timeoutMs?: number; resetState?: boolean },
-			_signal,
-			_onUpdate,
-		): Promise<any> {
-			const loaded = await ensureStateReady(state, initPromise);
-			if (!loaded) {
-				return {
-					isError: true,
-					content: [{ type: "text" as const, text: "MCP is not initialized" }],
-					details: { error: "not_initialized" },
-				};
-			}
-			state = loaded;
-
-			await hydrateAllMetadata(loaded, { refresh: false });
-
-			const bindings = createSandboxBindings(loaded);
-
-			try {
-				const result = await loaded.runtime.execute({
-					code: params.code,
-					timeoutMs: params.timeoutMs,
-					resetState: params.resetState,
-					bindings,
-				});
-
-				const payload = {
-					result: result.result,
-					logs: result.logs,
-				};
-
-				return {
-					content: [{ type: "text" as const, text: formatSandboxValue(payload) }],
-					details: {
-						ok: true,
-						logCount: result.logs.length,
-						payload,
-						code: params.code,
-					},
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				return {
-					isError: true,
-					content: [{ type: "text" as const, text: formatSandboxError(error) }],
-					details: {
-						ok: false,
-						error: message,
-						code: params.code,
-					},
-				};
-			}
-		},
-		renderCall(args, theme) {
-			let text = theme.fg("toolTitle", theme.bold("call_mcp"));
-			const lineCount = typeof args.code === "string" ? args.code.split("\n").length : 0;
-			text += ` ${theme.fg("muted", `${lineCount} lines`)}`;
-			if (typeof args.timeoutMs === "number") {
-				text += ` ${theme.fg("dim", `${args.timeoutMs}ms`)}`;
-			}
-			return new Text(text, 0, 0);
-		},
-		renderResult(result, { expanded }, theme) {
-			const details = (result.details ?? {}) as {
-				ok?: boolean;
-				logCount?: number;
-				error?: string;
-				payload?: { result?: unknown };
+				result?: { ok?: boolean; toolCalls?: unknown[]; error?: { message?: string } };
+				calls?: unknown[];
 				code?: string;
 			};
-
-			const fullText = extractTextFromResult(result);
-			if (expanded) {
-				let text = "";
-				if (details.code) {
-					const codeLines = details.code
-						.split("\n")
-						.map((line) => theme.fg("dim", truncate(line, 220) || " "))
-						.join("\n");
-					text += `${theme.fg("accent", "JavaScript code:")}\n${codeLines}\n\n`;
-				}
-				text += `${theme.fg("accent", "Result:")}\n${fullText}`;
-				return new Text(text, 0, 0);
+			if (expanded) return new Text(extractTextFromResult(result), 0, 0);
+			if (details.result?.ok === false) {
+				return new Text(theme.fg("error", `✗ ${details.result.error?.message ?? "Code Mode failed"}`), 0, 0);
 			}
-
-			if (details.ok === false || details.error) {
-				const message = details.error || firstLine(fullText) || "MCP call failed";
-				const text = theme.fg("error", `✗ ${truncate(message, 180)}`);
-				return new Text(text, 0, 0);
-			}
-
-			const logCount = details.logCount ?? 0;
-			const summary = summarizeValue(details.payload?.result);
-			let text = theme.fg("success", "✓ MCP call succeeded");
-			if (summary) {
-				text += ` ${theme.fg("muted", summary)}`;
-			}
-			if (logCount > 0) {
-				text += ` ${theme.fg("dim", `(${logCount} logs)`)}`;
-			}
-			text += `\n${theme.fg("dim", "Expand tool output to inspect full code + payload")}`;
-			return new Text(text, 0, 0);
+			return new Text(
+				theme.fg("success", "✓ MCP Code Mode completed") +
+					theme.fg("muted", ` (${details.calls?.length ?? 0} MCP calls)`),
+				0,
+				0,
+			);
 		},
 	});
+
 
 	pi.registerCommand("mcp", {
 		description: "Manage MCP tools/auth (status, enable, disable, reconnect, auth)",
@@ -498,6 +335,75 @@ async function ensureStateReady(
 	} catch {
 		return null;
 	}
+}
+
+function createCodeModeRuntime(
+	state: McpExtensionState,
+	signal?: AbortSignal,
+	ctx?: ExtensionContext,
+) {
+	const clientFor = (serverId: string): McpClient => ({
+		callTool: async (wireToolName, input, options) => {
+			await ensureServerMetadata(state, serverId, false);
+			const connection = await ensureConnectedServer(state, serverId);
+			state.manager.touch(serverId);
+			state.manager.incrementInFlight(serverId);
+			try {
+				return (await connection.client.callTool(
+					{ name: wireToolName, arguments: input },
+					undefined,
+					{ signal: options.signal, timeout: options.timeout },
+				)) as unknown as McpCallResult;
+			} finally {
+				state.manager.decrementInFlight(serverId);
+				state.manager.touch(serverId);
+			}
+		},
+	});
+
+	const refs: McpToolRef[] = getAllEntries(state)
+		.filter((entry) => entry.kind === "tool" && isEntryEnabled(state, entry))
+		.map((entry) => ({
+			serverId: entry.server,
+			wireToolName: entry.name,
+			description: entry.description,
+			inputSchema: asJsonSchema(entry.inputSchema),
+			outputSchema: entry.outputSchema === undefined ? undefined : asJsonSchema(entry.outputSchema),
+			client: clientFor(entry.server),
+			timeout: 30_000,
+		}));
+
+	const authorize = createMcpAuthorizer({
+		isAllowed: (serverId, wireToolName) => {
+			const entry = findToolEntry(state, serverId, wireToolName);
+			return entry !== undefined && isEntryEnabled(state, entry);
+		},
+		requiresApproval: (serverId) => state.config.mcpServers[serverId]?.approval === "always",
+		requestApproval: async (request) => {
+			if (!ctx?.hasUI) return false;
+			const input = truncate(JSON.stringify(request.input), 800);
+			return ctx.ui.confirm(
+				`Approve MCP call to ${request.serverId}/${request.wireToolName}?`,
+				input || "{}",
+				{ signal: request.signal },
+			);
+		},
+	});
+
+	const built = buildMcpCodeModeTools({ refs, authorize, signal });
+	return {
+		runtime: CodeMode.make({
+			tools: built.tools,
+			limits: { timeoutMs: 30_000, maxToolCalls: 100, maxOutputBytes: 50 * 1024 },
+		}) as CodeMode.Runtime<never>,
+		metadata: built.metadata,
+		mappings: built.mappings,
+	};
+}
+
+function asJsonSchema(value: unknown): JsonSchema {
+	if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonSchema;
+	return { type: "object", additionalProperties: true };
 }
 
 async function openMcpMenu(state: McpExtensionState, ctx: ExtensionContext): Promise<void> {
@@ -1049,7 +955,7 @@ function saveToolPolicies(policies: Map<string, ServerToolPolicy>): void {
 		};
 	}
 
-	mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
+	mkdirSync(dirname(TOOL_POLICY_PATH), { recursive: true });
 	writeFileSync(
 		TOOL_POLICY_PATH,
 		`${JSON.stringify({ version: 1, servers }, null, 2)}\n`,
@@ -1486,7 +1392,6 @@ async function initializeMcp(pi: ExtensionAPI, ctx: ExtensionContext): Promise<M
 	const lifecycle = new McpLifecycleManager(manager);
 	const toolIndex = new Map<string, ToolIndexEntry[]>();
 	const failureTracker = new Map<string, number>();
-	const runtime = new JavaScriptSandboxRuntime();
 	const toolPolicies = loadToolPolicies();
 	const state: McpExtensionState = {
 		manager,
@@ -1494,7 +1399,6 @@ async function initializeMcp(pi: ExtensionAPI, ctx: ExtensionContext): Promise<M
 		config,
 		toolIndex,
 		failureTracker,
-		runtime,
 		toolPolicies,
 		ui: ctx.hasUI ? ctx.ui : undefined,
 	};
@@ -1623,6 +1527,7 @@ function buildToolIndex(
 			name: tool.name,
 			description: tool.description ?? "",
 			inputSchema: tool.inputSchema,
+			outputSchema: tool.outputSchema,
 		});
 	}
 
@@ -1969,151 +1874,6 @@ function writeOverflowFile(entries: ToolIndexEntry[], query?: string): string {
 	return file;
 }
 
-function createSandboxBindings(state: McpExtensionState) {
-	const getCatalog = () => {
-		const tools: Record<string, string[]> = {};
-		const resources: Record<string, Array<{ name: string; uri: string; description: string }>> = {};
-		for (const serverName of Object.keys(state.config.mcpServers)) {
-			const entries = state.toolIndex.get(serverName) ?? [];
-			tools[serverName] = entries
-				.filter((entry) => entry.kind === "tool" && isEntryEnabled(state, entry))
-				.map((entry) => entry.name)
-				.sort();
-			resources[serverName] = entries
-				.filter((entry) => entry.kind === "resource" && isEntryEnabled(state, entry))
-				.map((entry) => ({
-					name: entry.name,
-					uri: entry.resourceUri ?? "",
-					description: entry.description,
-				}))
-				.sort((a, b) => a.name.localeCompare(b.name));
-		}
-		return { tools, resources };
-	};
-
-	const listTools = (query?: string) => {
-		const matcher = buildQueryMatcher(query);
-		return getAllEntries(state)
-			.filter((entry) => isEntryEnabled(state, entry) && matcher(formatSearchText(entry)))
-			.map((entry) => ({
-				kind: entry.kind,
-				server: entry.server,
-				name: entry.name,
-				description: entry.description,
-				resourceUri: entry.resourceUri,
-				inputSchema: entry.kind === "tool" ? entry.inputSchema : undefined,
-			}));
-	};
-
-	return {
-		call: async (server: string, tool: string, args: Record<string, unknown> = {}) => {
-			if (typeof server !== "string" || !server) {
-				throw new Error("call(server, tool, args): server must be a non-empty string");
-			}
-			if (typeof tool !== "string" || !tool) {
-				throw new Error("call(server, tool, args): tool must be a non-empty string");
-			}
-
-			await ensureServerMetadata(state, server, false);
-			const toolEntry = findToolEntry(state, server, tool);
-			if (!toolEntry) {
-				const suggestions = suggestToolNames(state, server, tool, 4);
-				const suffix = suggestions.length > 0 ? ` Similar tools: ${suggestions.join(", ")}` : "";
-				throw new Error(`Unknown MCP tool: ${server}/${tool}.${suffix}`);
-			}
-			if (!isEntryEnabled(state, toolEntry)) {
-				throw new Error(`MCP tool is disabled by policy: ${server}/${tool}`);
-			}
-
-			const connection = await ensureConnectedServer(state, server);
-			state.manager.touch(server);
-			state.manager.incrementInFlight(server);
-			try {
-				const originalArgs = normalizeToolArgs(args);
-				let callArgs = originalArgs;
-				let result = await connection.client.callTool({
-					name: tool,
-					arguments: callArgs,
-				});
-
-				if (result.isError) {
-					const initialError = extractMcpErrorText((result.content ?? []) as McpContent[]);
-					const retryArgs = maybeConvertArgsForRetry(callArgs, initialError);
-					if (retryArgs) {
-						const retried = await connection.client.callTool({
-							name: tool,
-							arguments: retryArgs,
-						});
-						if (!retried.isError) {
-							result = retried;
-							callArgs = retryArgs;
-						} else {
-							result = retried;
-						}
-					}
-				}
-
-				if (result.isError) {
-					const errorText = extractMcpErrorText((result.content ?? []) as McpContent[]);
-					throw new Error(buildToolCallErrorMessage(toolEntry, errorText, callArgs));
-				}
-
-				return {
-					content: normalizeMcpContent((result.content ?? []) as McpContent[]),
-					structuredContent: (result as { structuredContent?: unknown }).structuredContent,
-				};
-			} finally {
-				state.manager.decrementInFlight(server);
-				state.manager.touch(server);
-			}
-		},
-
-		readResource: async (server: string, uri: string) => {
-			if (typeof server !== "string" || !server) {
-				throw new Error("readResource(server, uri): server must be a non-empty string");
-			}
-			if (typeof uri !== "string" || !uri) {
-				throw new Error("readResource(server, uri): uri must be a non-empty string");
-			}
-
-			await ensureServerMetadata(state, server, false);
-			const resourceEntry = findResourceEntryByUri(state, server, uri);
-			if (!resourceEntry) {
-				throw new Error(`Unknown MCP resource URI: ${server}/${uri}`);
-			}
-			if (!isEntryEnabled(state, resourceEntry)) {
-				throw new Error(`MCP resource is disabled by policy: ${server}/${resourceEntry.name}`);
-			}
-
-			const connection = await ensureConnectedServer(state, server);
-			state.manager.touch(server);
-			state.manager.incrementInFlight(server);
-			try {
-				const result = await connection.client.readResource({ uri });
-				return {
-					ok: true,
-					contents: (result.contents ?? []).map((item) => {
-						if ("text" in item && typeof item.text === "string") {
-							return { uri: item.uri, mimeType: item.mimeType, text: item.text };
-						}
-						if ("blob" in item && typeof item.blob === "string") {
-							return { uri: item.uri, mimeType: item.mimeType, blob: item.blob };
-						}
-						return item;
-					}),
-				};
-			} finally {
-				state.manager.decrementInFlight(server);
-				state.manager.touch(server);
-			}
-		},
-
-		listTools,
-		servers: Object.keys(state.config.mcpServers),
-		tools: getCatalog().tools,
-		resources: getCatalog().resources,
-	};
-}
 
 async function ensureConnectedServer(state: McpExtensionState, serverName: string) {
 	const definition = state.config.mcpServers[serverName];

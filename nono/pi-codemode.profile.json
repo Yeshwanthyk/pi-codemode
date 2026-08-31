@@ -1,0 +1,48 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "extends": "default",
+  "meta": {
+    "name": "pi-codemode",
+    "version": "1.0.0",
+    "description": "Outer-session sandbox for Pi with local CodeMode and explicitly approved MCP endpoints"
+  },
+  "workdir": {
+    "access": "readwrite"
+  },
+  "groups": {
+    "include": [
+      "node_runtime",
+      "git_config"
+    ]
+  },
+  "filesystem": {
+    "read": [
+      "$HOME/.pi/pi-codemode"
+    ],
+    "deny": [
+      "$HOME/.pi/agent/auth.json",
+      "$HOME/.pi/agent/mcp-oauth"
+    ]
+  },
+  "environment": {
+    "set_vars": {
+      "PI_CODING_AGENT_DIR": "$TMPDIR/pi-codemode-agent",
+      "PI_OFFLINE": "1",
+      "PI_SKIP_VERSION_CHECK": "1"
+    }
+  },
+  "network": {
+    "block": false,
+    "network_profile": "minimal",
+    "allow_domain": [
+      "api.githubcopilot.com",
+      "mcp.sentry.dev",
+      "mcp.linear.app",
+      "registry.npmjs.org"
+    ],
+    "credentials": [
+      "openai",
+      "anthropic"
+    ]
+  }
+}

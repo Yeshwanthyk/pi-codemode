@@ -1,0 +1,104 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "extends": "default",
+  "meta": {
+    "name": "pi-codemode-per-server",
+    "version": "1.0.0",
+    "description": "Production-oriented template: the repository's exact Sentry npx launch is argument-gated and brokered as a child command. The GitHub HTTP MCP server has no child command to mediate, so its /mcp route remains an outer-session network allowlist limitation rather than an independent Tool Sandbox policy."
+  },
+  "workdir": {
+    "access": "read"
+  },
+  "network": {
+    "block": false,
+    "network_profile": "minimal",
+    "allow_domain": [
+      "registry.npmjs.org",
+      "mcp.sentry.dev",
+      "https://api.githubcopilot.com/mcp/**"
+    ],
+    "credentials": []
+  },
+  "command_policies": {
+    "deny_direct_exec_bypass": [
+      "/Users/yesh/.nvm/versions/node/v22.22.2/lib/node_modules/npm/bin/npx-cli.js"
+    ],
+    "commands": {
+      "npx": {
+        "executable": "/Users/yesh/.nvm/versions/node/v22.22.2/bin/npx",
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read": [
+                ".",
+                "/Users/yesh/.nvm/versions/node/v22.22.2",
+                "/Users/yesh/.nvm/versions/node/v22.22.2/lib/node_modules/npm",
+                "$HOME/.npm"
+              ],
+              "fs_write": [
+                "$HOME/.npm"
+              ],
+              "network": {
+                "allow_domain": [
+                  "registry.npmjs.org",
+                  "mcp.sentry.dev"
+                ]
+              },
+              "environment": {
+                "allow_vars": [
+                  "PATH",
+                  "HOME",
+                  "LANG",
+                  "LC_*",
+                  "NO_COLOR",
+                  "NPM_CONFIG_*"
+                ]
+              },
+              "stdio": {
+                "stdout": {
+                  "max_bytes": 1048576,
+                  "on_limit": "terminate"
+                },
+                "stderr": {
+                  "max_bytes": 262144,
+                  "on_limit": "terminate"
+                }
+              }
+            },
+            "invocation_policy": {
+              "default": "deny",
+              "allow": [
+                {
+                  "argv": {
+                    "exact": [
+                      "-y",
+                      "mcp-remote@latest",
+                      "https://mcp.sentry.dev/mcp"
+                    ]
+                  },
+                  "reason": "Exact Sentry stdio MCP launch declared in .mcp.json"
+                }
+              ]
+            }
+          }
+        },
+        "intercept": [
+          {
+            "match": {
+              "argv": {
+                "exact": [
+                  "-y",
+                  "mcp-remote@latest",
+                  "https://mcp.sentry.dev/mcp"
+                ]
+              }
+            },
+            "action": {
+              "type": "passthrough"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

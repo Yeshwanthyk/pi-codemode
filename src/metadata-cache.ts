@@ -1,17 +1,18 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import type { McpResource, McpTool, ServerEntry, ToolIndexEntry } from "./types.js";
+import { getPiAgentDir } from "./paths.js";
 
 const CACHE_VERSION = 1;
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const CACHE_PATH = join(homedir(), ".pi", "agent", "mcp-cache.json");
+const CACHE_PATH = join(getPiAgentDir(), "mcp-cache.json");
 
 export interface CachedTool {
 	name: string;
 	description?: string;
 	inputSchema?: unknown;
+	outputSchema?: unknown;
 }
 
 export interface CachedResource {
@@ -107,6 +108,7 @@ export function serializeTools(tools: McpTool[]): CachedTool[] {
 			name: tool.name,
 			description: tool.description,
 			inputSchema: tool.inputSchema,
+			outputSchema: tool.outputSchema,
 		}));
 }
 
@@ -135,6 +137,7 @@ export function reconstructToolIndex(
 			name: tool.name,
 			description: tool.description ?? "",
 			inputSchema: tool.inputSchema,
+			outputSchema: tool.outputSchema,
 		});
 	}
 

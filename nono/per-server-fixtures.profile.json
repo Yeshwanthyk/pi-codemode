@@ -1,0 +1,183 @@
+{
+  "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
+  "extends": "default",
+  "meta": {
+    "name": "pi-codemode-per-server-fixtures",
+    "version": "1.0.0",
+    "description": "TEST ONLY: independent brokered sandboxes for writable-checkout MCP fixtures. Each pinned fixture uses a per-command writable-executable trust downgrade; never use this profile for production executables."
+  },
+  "workdir": {
+    "access": "read"
+  },
+  "filesystem": {
+    "allow": [
+      "/tmp/nono-per-server-proof"
+    ]
+  },
+  "network": {
+    "block": true,
+    "credentials": []
+  },
+  "command_policies": {
+    "deny_direct_exec_bypass": [
+      "/Users/yesh/.pi/pi-codemode/test/fixtures/mcp-alpha",
+      "/Users/yesh/.pi/pi-codemode/test/fixtures/mcp-beta"
+    ],
+    "commands": {
+      "mcp-alpha": {
+        "executable": "/Users/yesh/.pi/pi-codemode/test/fixtures/mcp-alpha",
+        "allow_writable_executable": true,
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read": [
+                "/tmp/nono-per-server-proof",
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/proof-data/alpha",
+                "/Users/yesh/.pi/pi-codemode/test/fixtures",
+                "/Users/yesh/.pi/pi-codemode/node_modules",
+                "/Users/yesh/.nvm/versions/node/v22.22.2"
+              ],
+              "fs_write": [
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/proof-data/alpha/output",
+                "/tmp/nono-per-server-proof"
+              ],
+              "network": {},
+              "environment": {
+                "allow_vars": [
+                  "PATH",
+                  "LANG",
+                  "LC_*",
+                  "MCP_FIXTURE_MARKER_DIR"
+                ]
+              },
+              "stdio": {
+                "stdout": {
+                  "max_bytes": 16384,
+                  "on_limit": "truncate"
+                },
+                "stderr": {
+                  "max_bytes": 8192,
+                  "on_limit": "terminate"
+                }
+              }
+            }
+          }
+        },
+        "intercept": [
+          {
+            "args": [
+              "--nono-proof"
+            ],
+            "action": {
+              "type": "exec",
+              "command": [
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/fixture-policy-probe",
+                "alpha"
+              ]
+            }
+          },
+          {
+            "args": [
+              "--nono-proof-output"
+            ],
+            "action": {
+              "type": "exec",
+              "command": [
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/fixture-policy-probe",
+                "alpha"
+              ]
+            }
+          },
+          {
+            "args": [],
+            "action": {
+              "type": "exec",
+              "command": [
+                "/Users/yesh/.nvm/versions/node/v22.22.2/bin/node",
+                "/Users/yesh/.pi/pi-codemode/test/fixtures/mcp-fixture-server.mjs",
+                "mcp-alpha"
+              ]
+            }
+          }
+        ]
+      },
+      "mcp-beta": {
+        "executable": "/Users/yesh/.pi/pi-codemode/test/fixtures/mcp-beta",
+        "allow_writable_executable": true,
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read": [
+                "/tmp/nono-per-server-proof",
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/proof-data/beta",
+                "/Users/yesh/.pi/pi-codemode/test/fixtures",
+                "/Users/yesh/.pi/pi-codemode/node_modules",
+                "/Users/yesh/.nvm/versions/node/v22.22.2"
+              ],
+              "fs_write": [
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/proof-data/beta/output",
+                "/tmp/nono-per-server-proof"
+              ],
+              "network": {},
+              "environment": {
+                "allow_vars": [
+                  "PATH",
+                  "LANG",
+                  "LC_*",
+                  "MCP_FIXTURE_MARKER_DIR"
+                ]
+              },
+              "stdio": {
+                "stdout": {
+                  "max_bytes": 16384,
+                  "on_limit": "truncate"
+                },
+                "stderr": {
+                  "max_bytes": 8192,
+                  "on_limit": "terminate"
+                }
+              }
+            }
+          }
+        },
+        "intercept": [
+          {
+            "args": [
+              "--nono-proof"
+            ],
+            "action": {
+              "type": "exec",
+              "command": [
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/fixture-policy-probe",
+                "beta"
+              ]
+            }
+          },
+          {
+            "args": [
+              "--nono-proof-output"
+            ],
+            "action": {
+              "type": "exec",
+              "command": [
+                "/Users/yesh/.pi/pi-codemode/scripts/nono/fixture-policy-probe",
+                "beta"
+              ]
+            }
+          },
+          {
+            "args": [],
+            "action": {
+              "type": "exec",
+              "command": [
+                "/Users/yesh/.nvm/versions/node/v22.22.2/bin/node",
+                "/Users/yesh/.pi/pi-codemode/test/fixtures/mcp-fixture-server.mjs",
+                "mcp-beta"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

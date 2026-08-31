@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /Users/yesh/.nvm/versions/node/v22.22.2/bin/node /Users/yesh/.pi/pi-codemode/test/fixtures/mcp-fixture-server.mjs mcp-alpha

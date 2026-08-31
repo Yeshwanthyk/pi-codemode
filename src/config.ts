@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve, join } from "node:path";
 import type { McpConfig, McpSettings, ServerEntry } from "./types.js";
+import { getPiAgentDir } from "./paths.js";
 
 const MCP_DEBUG = process.env.PI_MCP_DEBUG === "1";
 
@@ -12,8 +12,8 @@ function debugWarn(...args: unknown[]): void {
 }
 
 const GLOBAL_CONFIG_CANDIDATES = [
-	join(homedir(), ".pi", "agent", "mcp.json"),
-	join(homedir(), ".pi", "agent", ".mcp.json"),
+	join(getPiAgentDir(), "mcp.json"),
+	join(getPiAgentDir(), ".mcp.json"),
 ];
 
 const PROJECT_CONFIG_CANDIDATES = [
@@ -124,6 +124,7 @@ function normalizeServerEntry(value: unknown): ServerEntry | null {
 	const out: ServerEntry = {
 		command: typeof entry.command === "string" ? entry.command : undefined,
 		args,
+		resolveNpx: typeof entry.resolveNpx === "boolean" ? entry.resolveNpx : undefined,
 		env,
 		cwd: typeof entry.cwd === "string" ? entry.cwd : undefined,
 		url: typeof entry.url === "string" ? entry.url : undefined,
@@ -149,6 +150,7 @@ function normalizeServerEntry(value: unknown): ServerEntry | null {
 				: undefined,
 		exposeResources: typeof entry.exposeResources === "boolean" ? entry.exposeResources : undefined,
 		debug: typeof entry.debug === "boolean" ? entry.debug : undefined,
+		approval: entry.approval === "always" || entry.approval === "never" ? entry.approval : undefined,
 	};
 
 	if (!out.command && !out.url) {
