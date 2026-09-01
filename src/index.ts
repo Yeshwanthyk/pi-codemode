@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -35,7 +36,12 @@ import {
 	type MetadataFreshness,
 } from "./mcp/codemode-adapter.js";
 import type { McpCallResult } from "./mcp/result-projector.js";
+import { compactConsumedDiscoveries } from "./mcp/context-projection.js";
 import { createMcpAuthorizer } from "./mcp/authorization.js";
+import {
+	projectExecution,
+	type McpExecutionDetails,
+} from "./mcp/execution-projector.js";
 import { getStoredTokens, getTokensPath, saveStoredTokens } from "./oauth-handler.js";
 import { getPiAgentDir } from "./paths.js";
 import type { McpConfig, McpContent, McpResource, McpTool, ServerEntry, ToolIndexEntry } from "./types.js";
@@ -206,6 +212,10 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 		state = null;
 	});
 
+	pi.on("context", (event) => ({
+		messages: compactConsumedDiscoveries(event.messages),
+	}));
+
 	pi.on("before_agent_start", async (event) => {
 		const loaded = await ensureStateReady(state, initPromise);
 		if (!loaded) return;
@@ -213,7 +223,7 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 		await hydrateAllMetadata(loaded, { refresh: false });
 		const snapshot = createCodeModeRuntime(loaded);
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n# MCP Code Mode\n\n${snapshot.runtime.instructions()}`,
+			systemPrompt: appendMcpCodeModePrompt(event.systemPrompt, snapshot.runtime.instructions()),
 		};
 	});
 
@@ -238,20 +248,24 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 			_onUpdate,
 			ctx,
 		): Promise<any> {
+			const executionId = randomUUID();
 			const loaded = await ensureStateReady(state, initPromise);
 			if (!loaded) throw new Error("MCP is not initialized");
 			state = loaded;
 			await hydrateAllMetadata(loaded, { refresh: false });
 			const snapshot = createCodeModeRuntime(loaded, signal, ctx);
 			const result = await Effect.runPromise(snapshot.runtime.execute(params.code), { signal });
+			const projection = projectExecution({
+				executionId,
+				catalogSnapshotId: snapshot.catalog.hash,
+				result,
+				calls: snapshot.metadata,
+				mappings: snapshot.mappings,
+				code: params.code,
+			});
 			return {
-				content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-				details: {
-					result,
-					calls: snapshot.metadata,
-					mappings: snapshot.mappings,
-					code: params.code,
-				},
+				content: [{ type: "text" as const, text: projection.text }],
+				details: projection.details,
 			};
 		},
 		renderCall(args, theme) {
@@ -263,14 +277,31 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 			);
 		},
 		renderResult(result, { expanded }, theme) {
-			const details = (result.details ?? {}) as {
+			const details = (result.details ?? {}) as Partial<McpExecutionDetails> & {
 				result?: { ok?: boolean; toolCalls?: unknown[]; error?: { message?: string } };
-				calls?: unknown[];
-				code?: string;
+				calls?: Array<{ runtimePath?: string; outcome?: string }>;
 			};
-			if (expanded) return new Text(extractTextFromResult(result), 0, 0);
+			if (expanded) {
+				const modelText = extractTextFromResult(result);
+				if (!details.executionId || !details.catalogSnapshotId) return new Text(modelText, 0, 0);
+				const calls = details.calls ?? [];
+				const callLines = calls.slice(0, 20).map((call) =>
+					`- ${call.runtimePath ?? "unknown MCP operation"}: ${call.outcome ?? "unknown"}`,
+				);
+				if (calls.length > callLines.length) callLines.push(`- ... ${calls.length - callLines.length} more calls`);
+				return new Text([
+					modelText,
+					"",
+					`Execution ID: ${details.executionId}`,
+					`Catalog ID: ${details.catalogSnapshotId}`,
+					`Kind: ${details.kind ?? "orchestration"}`,
+					`MCP calls: ${calls.length}`,
+					...callLines,
+				].join("\n"), 0, 0);
+			}
 			if (details.result?.ok === false) {
-				return new Text(theme.fg("error", `✗ ${details.result.error?.message ?? "Code Mode failed"}`), 0, 0);
+				const safeSummary = truncate(firstLine(extractTextFromResult(result)) || "Code Mode failed", 240);
+				return new Text(theme.fg("error", `✗ ${safeSummary}`), 0, 0);
 			}
 			return new Text(
 				theme.fg("success", "✓ MCP Code Mode completed") +
@@ -343,7 +374,7 @@ async function ensureStateReady(
 	}
 }
 
-function createCodeModeRuntime(
+export function createCodeModeRuntime(
 	state: McpExtensionState,
 	signal?: AbortSignal,
 	ctx?: ExtensionContext,
@@ -399,15 +430,31 @@ function createCodeModeRuntime(
 	});
 
 	const built = buildMcpCodeModeTools({ refs, authorize, signal });
+	const namespaceHints = Object.fromEntries(
+		built.catalog.connectors.flatMap((connector) => {
+			const namespace = connector.operations[0]?.runtimePath.split(".")[0];
+			return namespace && connector.description ? [[namespace, connector.description] as const] : [];
+		}),
+	);
 	return {
 		runtime: CodeMode.make({
 			tools: built.tools,
+			discovery: {
+				mode: "progressive",
+				searchLimit: 5,
+				describeLimit: 12,
+				namespaceHints,
+			},
 			limits: { timeoutMs: 30_000, maxToolCalls: 100, maxOutputBytes: 50 * 1024 },
 		}) as CodeMode.Runtime<never>,
 		catalog: built.catalog,
 		metadata: built.metadata,
 		mappings: built.mappings,
 	};
+}
+
+export function appendMcpCodeModePrompt(systemPrompt: string, instructions: string): string {
+	return `${systemPrompt}\n\n# MCP Code Mode\n\n${instructions}`;
 }
 
 function asJsonSchema(value: unknown): JsonSchema {
