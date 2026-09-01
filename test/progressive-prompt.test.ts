@@ -54,6 +54,11 @@ describe("Pi progressive MCP prompt", () => {
 		);
 		expect(instructions).toContain("tools.$codemode.search");
 		expect(instructions).toContain("tools.$codemode.describe");
+		expect(instructions).toContain("Search limits are 1..5 results per call");
+		expect(instructions).toContain("describe accepts at most 12 paths per call");
+		expect(instructions).toContain("ONE discovery program/execution");
+		expect(instructions).toContain("next execution for complete task orchestration");
+		expect(instructions).toContain("search-only or describe-only");
 		expect(instructions).not.toContain("tools.work_tracker.create_item");
 		expect(instructions).not.toContain("tools.work_tracker.search_items");
 		expect(instructions).not.toContain("REMOTE TOOL DESCRIPTION MUST NOT APPEAR");

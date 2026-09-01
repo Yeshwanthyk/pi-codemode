@@ -285,6 +285,12 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 				const modelText = extractTextFromResult(result);
 				if (!details.executionId || !details.catalogSnapshotId) return new Text(modelText, 0, 0);
 				const calls = details.calls ?? [];
+				const discoveryCalls = Array.isArray(details.result?.toolCalls)
+					? details.result.toolCalls.length
+					: calls.length;
+				const callSummary = details.kind === "discovery"
+					? `Discovery calls: ${discoveryCalls}`
+					: `MCP calls: ${calls.length}`;
 				const callLines = calls.slice(0, 20).map((call) =>
 					`- ${call.runtimePath ?? "unknown MCP operation"}: ${call.outcome ?? "unknown"}`,
 				);
@@ -295,7 +301,7 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 					`Execution ID: ${details.executionId}`,
 					`Catalog ID: ${details.catalogSnapshotId}`,
 					`Kind: ${details.kind ?? "orchestration"}`,
-					`MCP calls: ${calls.length}`,
+					callSummary,
 					...callLines,
 				].join("\n"), 0, 0);
 			}
@@ -303,9 +309,16 @@ export default function mcpCodemodeExtension(pi: ExtensionAPI) {
 				const safeSummary = truncate(firstLine(extractTextFromResult(result)) || "Code Mode failed", 240);
 				return new Text(theme.fg("error", `✗ ${safeSummary}`), 0, 0);
 			}
+			const calls = details.calls ?? [];
+			const discoveryCalls = Array.isArray(details.result?.toolCalls)
+				? details.result.toolCalls.length
+				: calls.length;
+			const collapsedSummary = details.kind === "discovery"
+				? `${discoveryCalls} discovery calls`
+				: `${calls.length} MCP calls`;
 			return new Text(
 				theme.fg("success", "✓ MCP Code Mode completed") +
-					theme.fg("muted", ` (${details.calls?.length ?? 0} MCP calls)`),
+					theme.fg("muted", ` (${collapsedSummary})`),
 				0,
 				0,
 			);

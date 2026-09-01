@@ -63,11 +63,22 @@ const errorText = (result: McpCallResult): string => {
 	return text || "MCP server returned an error";
 };
 
+const parseJsonText = (text: string): unknown => {
+	try {
+		return JSON.parse(text);
+	} catch {
+		return text;
+	}
+};
+
 export function projectMcpResult(result: McpCallResult): unknown {
 	if (result.isError) throw new Error(errorText(result));
 	if (result.structuredContent !== undefined) return result.structuredContent;
 	const content = result.content ?? [];
 	if (content.length === 0) return null;
-	if (content.length === 1 && content[0]?.type === "text") return content[0].text;
+	const single = content[0];
+	if (content.length === 1 && single?.type === "text" && typeof single.text === "string") {
+		return parseJsonText(single.text);
+	}
 	return content.map(projectContent);
 }

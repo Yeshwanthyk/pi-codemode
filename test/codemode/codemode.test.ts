@@ -789,7 +789,28 @@ describe("CodeMode public contract", () => {
     expect(instructions).toContain("untrusted metadata")
     expect(instructions).toContain("tools.$codemode.search")
     expect(instructions).toContain("tools.$codemode.describe")
+    expect(instructions).toContain("ONE discovery program/execution")
+    expect(instructions).toContain("Search limits are 1..10 results per call")
+    expect(instructions).toContain("describe accepts at most 10 paths per call")
+    expect(instructions).toContain("Promise.all")
+    expect(instructions).toContain("union/deduplicate")
+    expect(instructions).toContain("next execution for complete task orchestration")
+    expect(instructions).toContain("search-only or describe-only")
     expect(instructions.length).toBeLessThan(4_000)
+  })
+
+  test("progressive instructions state configured bounds without changing inline workflow", () => {
+    const progressive = CodeMode.make({
+      tools,
+      discovery: { mode: "progressive", searchLimit: 3, describeLimit: 4 },
+    }).instructions()
+    const inline = CodeMode.make({ tools }).instructions()
+
+    expect(progressive).toContain("Search limits are 1..3 results per call")
+    expect(progressive).toContain("describe accepts at most 4 paths per call")
+    expect(progressive).toContain("chunk and parallelize describe calls")
+    expect(inline).not.toContain("ONE discovery program/execution")
+    expect(inline).not.toContain("search-only or describe-only")
   })
 
   test("search defaults to 10 results and resolves exact tool paths", async () => {

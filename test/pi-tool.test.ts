@@ -51,6 +51,26 @@ test("renders new execution identity and legacy session details defensively", ()
 	expect(render(legacy, true)).toContain("legacy model content");
 	expect(render(legacy, false)).toContain("✓ MCP Code Mode completed (0 MCP calls)");
 
+	const discovery = {
+		content: [{ type: "text", text: "discovered signatures" }],
+		details: {
+			executionId: "discovery-1",
+			catalogSnapshotId: "catalog-1",
+			kind: "discovery",
+			result: {
+				ok: true,
+				value: [],
+				toolCalls: [{ name: "$codemode.search" }, { name: "$codemode.describe" }],
+			},
+			calls: [],
+			mappings: [],
+			code: "return discovery",
+		},
+	};
+	expect(render(discovery, false)).toContain("✓ MCP Code Mode completed (2 discovery calls)");
+	expect(render(discovery, true)).toContain("Discovery calls: 2");
+	expect(render(discovery, true)).not.toContain("MCP calls: 0");
+
 	const current = {
 		content: [{ type: "text", text: '[{"id":"item-1"}]' }],
 		details: {

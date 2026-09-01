@@ -130,6 +130,13 @@ return await tools.github.denied({ value: 2 })`,
 	test("projects structured, text, mixed, and empty results", () => {
 		expect(projectMcpResult({ structuredContent: { id: 1 }, content: [{ type: "text", text: "ignored" }] })).toEqual({ id: 1 });
 		expect(projectMcpResult({ content: [{ type: "text", text: "hello" }] })).toBe("hello");
+		expect(projectMcpResult({ content: [{ type: "text", text: '{"id":1}' }] })).toEqual({ id: 1 });
+		expect(projectMcpResult({ content: [{ type: "text", text: '[1,"two"]' }] })).toEqual([1, "two"]);
+		expect(projectMcpResult({ content: [{ type: "text", text: "42" }] })).toBe(42);
+		expect(projectMcpResult({ content: [{ type: "text", text: "true" }] })).toBe(true);
+		expect(projectMcpResult({ content: [{ type: "text", text: "null" }] })).toBeNull();
+		expect(projectMcpResult({ content: [{ type: "text", text: '\"decoded\"' }] })).toBe("decoded");
+		expect(projectMcpResult({ content: [{ type: "text", text: "{not json}" }] })).toBe("{not json}");
 		expect(projectMcpResult({ content: [{ type: "text", text: "hello" }, { type: "image", data: "secret", mimeType: "image/png" }] })).toEqual([
 			"hello",
 			{ type: "image", mimeType: "image/png", omitted: true },

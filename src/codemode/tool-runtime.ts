@@ -672,6 +672,17 @@ export const prepare = <R>(tools: HostTools<R>, options: DiscoveryOptions = {}):
               "2. Call it using the exact signature shown: `const result = await tools.<namespace>.<tool>(input)`; bracket notation and quotes are part of the path.",
               "3. Return only the fields you need from structured results; narrow unknown results before reading fields, and avoid returning large raw payloads.",
             ]
+          : mode === "progressive"
+            ? [
+                `1. Use ONE discovery program/execution. Search limits are 1..${searchLimit} results per call; run needed searches there, in parallel where useful, then union/deduplicate paths. Do not return search-only or describe-only results.`,
+                `2. In that same discovery program, call \`tools.$codemode.describe\` on the selected paths before returning; describe accepts at most ${describeLimit} paths per call, so chunk and parallelize describe calls when needed. Return the exact signatures needed for the task.`,
+                "3. Use the next execution for complete task orchestration: copy the described paths exactly, perform all dependent and independent tool calls, and return only the needed fields.",
+                "```js",
+                `const pages = await Promise.all(["<intent>", "<related capability>"].map(query => tools.$codemode.search({ query, limit: ${searchLimit} })))`,
+                `const paths = pages.flatMap(page => page.items.map(item => item.path)).filter((path, index, all) => all.indexOf(path) === index).slice(0, ${describeLimit})`,
+                "return await tools.$codemode.describe({ paths })",
+                "```",
+              ]
           : [
               '1. Discover compact matches: `return await tools.$codemode.search({ query: "<intent + key nouns>" })`.',
               '2. Fetch exact signatures for selected paths: `return await tools.$codemode.describe({ paths: ["<path>"] })`.',
