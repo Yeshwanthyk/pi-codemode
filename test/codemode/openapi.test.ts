@@ -395,7 +395,17 @@ describe("OpenAPI.fromSpec", () => {
         },
       ],
     })
-    expect(JSON.stringify(result.value)).toContain("healthy: true")
+    expect(JSON.stringify(result.value)).not.toContain("healthy: true")
+
+    const described = await Effect.runPromise(
+      runtime
+        .execute(
+          `return await tools.$codemode.describe({ paths: ["tools.opencode.v2.health.get"] })`,
+        )
+        .pipe(Effect.provide(layer)),
+    )
+    expect(described).toMatchObject({ ok: true })
+    if (described.ok) expect(JSON.stringify(described.value)).toContain("healthy: true")
   })
 
   test("invokes real opencode path parameters and JSON request bodies", async () => {

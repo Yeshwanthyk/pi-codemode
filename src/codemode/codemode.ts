@@ -16,10 +16,21 @@ export type ExecutionLimits = {
   readonly maxOutputBytes?: number
 }
 
-/** Controls how much of the tool catalog is inlined in agent instructions. */
+/** Agent-facing tool discovery strategy. */
+export type DiscoveryMode = "inline" | "progressive"
+
+/** Controls how tools are advertised and how much discovery data one call may return. */
 export type DiscoveryOptions = {
+  /** Discovery strategy (default `"inline"` for compatibility). */
+  readonly mode?: DiscoveryMode
   /** Approximate token budget (chars/4, default 2000) for full catalog entries. */
   readonly catalogBudget?: number
+  /** Default and maximum number of compact search results (default 10). */
+  readonly searchLimit?: number
+  /** Maximum number of paths accepted by one describe call (default 10). */
+  readonly describeLimit?: number
+  /** Optional short, untrusted descriptions shown beside progressive namespace names. */
+  readonly namespaceHints?: Readonly<Record<string, string>>
 }
 
 type ToolTree<R = never> = {
@@ -40,6 +51,8 @@ export type ExecuteOptions<Tools extends Record<string, unknown> = {}> = {
   tools?: Tools & ToolTree<Services<Tools>>
   /** Per-execution overrides for the default resource limits. */
   limits?: ExecutionLimits
+  /** Tool discovery configuration. */
+  readonly discovery?: DiscoveryOptions
   /** Observes decoded tool input immediately before tool execution. */
   onToolCallStart?: (call: ToolRuntime.ToolCallStarted) => Effect.Effect<void, never, Services<Tools>>
   /** Observes each admitted tool call as it settles, with outcome and duration. */
@@ -50,10 +63,7 @@ export type ExecuteOptions<Tools extends Record<string, unknown> = {}> = {
 export type DataValue = Schema.Json
 
 /** Configuration shared by `CodeMode.make` and `CodeMode.execute`. */
-export type Options<Tools extends Record<string, unknown> = {}> = Omit<ExecuteOptions<Tools>, "code"> & {
-  /** Progressive-disclosure configuration for the agent-facing tool catalog. */
-  readonly discovery?: DiscoveryOptions
-}
+export type Options<Tools extends Record<string, unknown> = {}> = Omit<ExecuteOptions<Tools>, "code">
 
 /** Schema for a host tool input containing CodeMode source. */
 export const Input = Schema.Struct({ code: Schema.String })
@@ -139,7 +149,8 @@ export const execute = <const Tools extends Record<string, unknown>>(
 ): Effect.Effect<Result, never, Services<Tools>> => {
   const tools = (options.tools ?? {}) as HostTools<Services<Tools>>
   ToolRuntime.assertValidTools(tools)
-  return executeWithLimits(options, resolveExecutionLimits(options.limits), ToolRuntime.searchIndex(tools))
+  const prepared = ToolRuntime.prepare(tools, options.discovery)
+  return executeWithLimits(options, resolveExecutionLimits(options.limits), prepared)
 }
 
 /** Creates an Effect-native runtime over explicit, schema-described tools. */
@@ -149,11 +160,11 @@ export const make = <const Tools extends Record<string, unknown> = {}>(
   const tools = (options.tools ?? {}) as HostTools<Services<Tools>>
   ToolRuntime.assertValidTools(tools)
   const limits = resolveExecutionLimits(options.limits)
-  const prepared = ToolRuntime.prepare(tools, options.discovery?.catalogBudget)
+  const prepared = ToolRuntime.prepare(tools, options.discovery)
 
   return {
     catalog: () => prepared.catalog,
     instructions: () => prepared.instructions,
-    execute: (code) => executeWithLimits<Tools>({ ...options, code }, limits, prepared.searchIndex),
+    execute: (code) => executeWithLimits<Tools>({ ...options, code }, limits, prepared),
   }
 }

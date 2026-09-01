@@ -3340,7 +3340,7 @@ class Interpreter<R> {
 export const executeWithLimits = <const Tools extends Record<string, unknown>>(
   options: ExecuteOptions<Tools>,
   limits: ResolvedExecutionLimits,
-  searchIndex: ToolRuntime.DiscoveryPlan["searchIndex"],
+  discovery: ToolRuntime.DiscoveryPlan,
 ): Effect.Effect<Result, never, Services<Tools>> => {
   const hooks = {
     ...(options.onToolCallStart === undefined ? {} : { onToolCallStart: options.onToolCallStart }),
@@ -3349,7 +3349,9 @@ export const executeWithLimits = <const Tools extends Record<string, unknown>>(
   const tools = ToolRuntime.make(
     (options.tools ?? {}) as HostTools<Services<Tools>>,
     limits.maxToolCalls,
-    searchIndex,
+    discovery.searchIndex,
+    discovery.searchLimit,
+    discovery.describeLimit,
     hooks,
   )
   const logs: Array<string> = []

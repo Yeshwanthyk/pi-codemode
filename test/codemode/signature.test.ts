@@ -338,20 +338,26 @@ describe("union schemas render every alternative", () => {
   })
 })
 
-describe("JSDoc signatures in catalogs and search results", () => {
+describe("JSDoc signatures in catalogs and describe results", () => {
   const runtime = CodeMode.make({ tools: { github: { list_issues: listIssues }, orders: { lookup: lookupOrder } } })
 
-  const search = async (query: string) => {
-    const result = await Effect.runPromise(
+  const describeMatch = async (query: string) => {
+    const search = await Effect.runPromise(
       runtime.execute(`return await tools.$codemode.search({ query: ${JSON.stringify(query)} })`),
     )
-    expect(result.ok).toBe(true)
-    if (!result.ok) throw new Error("search failed")
-    return result.value as { items: Array<{ path: string; signature: string }>; remaining: number }
+    expect(search.ok).toBe(true)
+    if (!search.ok) throw new Error("search failed")
+    const paths = (search.value as { items: Array<{ path: string }> }).items.map(({ path }) => path)
+    const described = await Effect.runPromise(
+      runtime.execute(`return await tools.$codemode.describe({ paths: ${JSON.stringify(paths)} })`),
+    )
+    expect(described.ok).toBe(true)
+    if (!described.ok) throw new Error("describe failed")
+    return (described.value as { tools: Array<{ path: string; signature: string }>; missing: Array<string> }).tools
   }
 
   test("a raw JSON Schema (MCP-style) tool's result signature carries field JSDoc and tags", async () => {
-    const { items } = await search("list issues repository")
+    const items = await describeMatch("list issues repository")
     const item = items.find(({ path }) => path === "tools.github.list_issues")!
     expect(item.signature).toBe(
       [
@@ -379,7 +385,7 @@ describe("JSDoc signatures in catalogs and search results", () => {
 
   test("an annotated Effect Schema tool's result signature carries field JSDoc (exact-path lookup too)", async () => {
     for (const query of ["look up order", "tools.orders.lookup"]) {
-      const { items } = await search(query)
+      const items = await describeMatch(query)
       const item = items.find(({ path }) => path === "tools.orders.lookup")!
       expect(item.signature).toBe(
         [
@@ -398,10 +404,10 @@ describe("JSDoc signatures in catalogs and search results", () => {
 
   test("the inline catalog uses the same JSDoc signatures", async () => {
     const instructions = runtime.instructions()
-    const github = (await search("list issues repository")).items.find(
+    const github = (await describeMatch("list issues repository")).find(
       ({ path }) => path === "tools.github.list_issues",
     )!
-    const orders = (await search("look up order")).items.find(({ path }) => path === "tools.orders.lookup")!
+    const orders = (await describeMatch("look up order")).find(({ path }) => path === "tools.orders.lookup")!
     expect(instructions).toContain(`  - ${github.signature} // List issues in a repository`)
     expect(instructions).toContain(`  - ${orders.signature} // Look up an order`)
     expect(instructions).toContain("/** Repository owner */")
@@ -435,15 +441,24 @@ describe("non-identifier tool paths", () => {
     expect(instructions).not.toContain("tools.context7.resolve_library_id")
   })
 
-  test("search results return callable bracket-notation paths and signatures", async () => {
+  test("search returns compact callable paths and describe returns their signatures", async () => {
     const result = await Effect.runPromise(
       runtime.execute(`return await tools.$codemode.search({ query: "resolve library" })`),
     )
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error("search failed")
 
-    const value = result.value as { items: Array<{ path: string; signature: string }> }
+    const value = result.value as { items: Array<{ path: string; description: string }> }
     expect(value.items[0]?.path).toBe('tools.context7["resolve-library-id"]')
-    expect(value.items[0]?.signature).toContain('tools.context7["resolve-library-id"](input: {')
+    expect(value.items[0]).not.toHaveProperty("signature")
+
+    const described = await Effect.runPromise(
+      runtime.execute(`return await tools.$codemode.describe({ paths: [${JSON.stringify(value.items[0]?.path)}] })`),
+    )
+    expect(described.ok).toBe(true)
+    if (!described.ok) throw new Error("describe failed")
+    const description = described.value as { tools: Array<{ path: string; signature: string }> }
+    expect(description.tools[0]?.path).toBe('tools.context7["resolve-library-id"]')
+    expect(description.tools[0]?.signature).toContain('tools.context7["resolve-library-id"](input: {')
   })
 })

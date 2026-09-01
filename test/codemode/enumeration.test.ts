@@ -53,7 +53,7 @@ describe("Object.keys over tool references", () => {
   })
 
   test("the internal discovery namespace enumerates its callable surface", async () => {
-    expect(await value(`return Object.keys(tools.$codemode)`)).toEqual(["search"])
+    expect(await value(`return Object.keys(tools.$codemode)`)).toEqual(["search", "describe"])
   })
 
   test("an unknown namespace is an UnknownTool error pointing at the discovery idioms", async () => {
@@ -146,7 +146,14 @@ describe("for...in", () => {
       }
       return names
     `),
-    ).toEqual(["github.list_issues", "github.get_issue", "memory.search", "playwright.navigate", "$codemode.search"])
+    ).toEqual([
+      "github.list_issues",
+      "github.get_issue",
+      "memory.search",
+      "playwright.navigate",
+      "$codemode.search",
+      "$codemode.describe",
+    ])
   })
 
   test("unsupported values fail with a hint at for...of and Object.keys", async () => {
