@@ -7,9 +7,9 @@ export interface CodeModeToolTree {
 }
 
 export interface ToolPathMapping {
-	serverId: string;
-	wireToolName: string;
-	runtimePath: string;
+	readonly serverId: string;
+	readonly wireToolName: string;
+	readonly runtimePath: string;
 }
 
 export interface ToolTreeBuildResult {

@@ -3,6 +3,9 @@ import { Tool, toolError } from "../codemode/index.js";
 import type { JsonSchema } from "../codemode/tool.js";
 import { projectMcpResult, type McpCallResult } from "./result-projector.js";
 import { buildToolTree, type ToolTreeBuildResult } from "./tool-tree.js";
+import { buildCatalogSnapshot, type CatalogSnapshot } from "./catalog.js";
+
+export type MetadataFreshness = "live" | "cached";
 
 export interface McpClient {
 	callTool(
@@ -15,9 +18,11 @@ export interface McpClient {
 export interface McpToolRef {
 	serverId: string;
 	wireToolName: string;
+	connectorDescription?: string;
 	description?: string;
 	inputSchema: JsonSchema;
 	outputSchema?: JsonSchema;
+	metadataFreshness?: MetadataFreshness;
 	client: McpClient;
 	timeout?: number;
 }
@@ -50,6 +55,7 @@ export interface BuildMcpCodeModeToolsOptions {
 
 export interface McpCodeModeTools extends ToolTreeBuildResult {
 	metadata: McpCallMetadata[];
+	catalog: CatalogSnapshot;
 }
 
 const asInputRecord = (input: unknown): Record<string, unknown> => {
@@ -148,5 +154,5 @@ export function buildMcpCodeModeTools(options: BuildMcpCodeModeToolsOptions): Mc
 				}),
 		}),
 	);
-	return { ...built, metadata };
+	return { ...built, metadata, catalog: buildCatalogSnapshot(options.refs, built.mappings) };
 }

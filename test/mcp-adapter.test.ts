@@ -45,6 +45,11 @@ describe("MCP CodeMode adapter", () => {
 		]);
 		expect(callTool).toHaveBeenCalledWith("echo-value", { value: 3 }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
 		expect(result).toMatchObject({ ok: true, value: { echoed: 3 } });
+		expect(built.catalog.operations[0]).toMatchObject({
+			serverId: "Git Hub",
+			wireToolName: "echo-value",
+			runtimePath: "Git_Hub.echo_value",
+		});
 	});
 
 	test("resolves normalized server and tool collisions without changing wire names", async () => {

@@ -38,6 +38,7 @@ export interface McpContent {
 }
 
 export interface ServerEntry {
+	description?: string;
 	command?: string;
 	args?: string[];
 	/** Keep the declared launcher intact so a Nono command policy can broker it. */

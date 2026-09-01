@@ -28,7 +28,12 @@ import {
 } from "./metadata-cache.js";
 import { CodeMode } from "./codemode/index.js";
 import type { JsonSchema } from "./codemode/tool.js";
-import { buildMcpCodeModeTools, type McpClient, type McpToolRef } from "./mcp/codemode-adapter.js";
+import {
+	buildMcpCodeModeTools,
+	type McpClient,
+	type McpToolRef,
+	type MetadataFreshness,
+} from "./mcp/codemode-adapter.js";
 import type { McpCallResult } from "./mcp/result-projector.js";
 import { createMcpAuthorizer } from "./mcp/authorization.js";
 import { getStoredTokens, getTokensPath, saveStoredTokens } from "./oauth-handler.js";
@@ -64,6 +69,7 @@ interface McpExtensionState {
 	toolIndex: Map<string, ToolIndexEntry[]>;
 	failureTracker: Map<string, number>;
 	toolPolicies: Map<string, ServerToolPolicy>;
+	metadataFreshness: Map<string, MetadataFreshness>;
 	ui?: ExtensionContext["ui"];
 }
 
@@ -366,11 +372,13 @@ function createCodeModeRuntime(
 		.map((entry) => ({
 			serverId: entry.server,
 			wireToolName: entry.name,
+			connectorDescription: state.config.mcpServers[entry.server]?.description,
 			description: entry.description,
 			inputSchema: asJsonSchema(entry.inputSchema),
 			outputSchema: entry.outputSchema === undefined ? undefined : asJsonSchema(entry.outputSchema),
 			client: clientFor(entry.server),
 			timeout: 30_000,
+			metadataFreshness: state.metadataFreshness.get(entry.server) ?? "live",
 		}));
 
 	const authorize = createMcpAuthorizer({
@@ -396,6 +404,7 @@ function createCodeModeRuntime(
 			tools: built.tools,
 			limits: { timeoutMs: 30_000, maxToolCalls: 100, maxOutputBytes: 50 * 1024 },
 		}) as CodeMode.Runtime<never>,
+		catalog: built.catalog,
 		metadata: built.metadata,
 		mappings: built.mappings,
 	};
@@ -1393,6 +1402,7 @@ async function initializeMcp(pi: ExtensionAPI, ctx: ExtensionContext): Promise<M
 	const toolIndex = new Map<string, ToolIndexEntry[]>();
 	const failureTracker = new Map<string, number>();
 	const toolPolicies = loadToolPolicies();
+	const metadataFreshness = new Map<string, MetadataFreshness>();
 	const state: McpExtensionState = {
 		manager,
 		lifecycle,
@@ -1400,6 +1410,7 @@ async function initializeMcp(pi: ExtensionAPI, ctx: ExtensionContext): Promise<M
 		toolIndex,
 		failureTracker,
 		toolPolicies,
+		metadataFreshness,
 		ui: ctx.hasUI ? ctx.ui : undefined,
 	};
 
@@ -1423,6 +1434,7 @@ async function initializeMcp(pi: ExtensionAPI, ctx: ExtensionContext): Promise<M
 		const cachedServer = cache?.servers?.[serverName];
 		if (cachedServer && isServerCacheValid(cachedServer, definition)) {
 			toolIndex.set(serverName, reconstructToolIndex(serverName, cachedServer, definition.exposeResources));
+			metadataFreshness.set(serverName, "cached");
 		}
 	}
 
@@ -1494,6 +1506,7 @@ async function ensureServerMetadata(
 		state.failureTracker.delete(serverName);
 		const metadata = buildToolIndex(serverName, connection.tools, connection.resources, definition);
 		state.toolIndex.set(serverName, metadata);
+		state.metadataFreshness.set(serverName, "live");
 		updateMetadataCache(state, serverName);
 		updateStatusBar(state);
 		return true;
@@ -1895,6 +1908,7 @@ async function ensureConnectedServer(state: McpExtensionState, serverName: strin
 		const connection = await state.manager.connect(serverName, definition);
 		state.failureTracker.delete(serverName);
 		state.toolIndex.set(serverName, buildToolIndex(serverName, connection.tools, connection.resources, definition));
+		state.metadataFreshness.set(serverName, "live");
 		updateMetadataCache(state, serverName);
 		updateStatusBar(state);
 		return connection;
@@ -2020,4 +2034,3 @@ async function parallelLimit<T, R>(items: T[], limit: number, fn: (item: T) => P
 	await Promise.all(workers);
 	return results;
 }
-

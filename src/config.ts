@@ -122,6 +122,7 @@ function normalizeServerEntry(value: unknown): ServerEntry | null {
 	const headers = normalizeStringRecord(entry.headers);
 
 	const out: ServerEntry = {
+		description: typeof entry.description === "string" ? entry.description : undefined,
 		command: typeof entry.command === "string" ? entry.command : undefined,
 		args,
 		resolveNpx: typeof entry.resolveNpx === "boolean" ? entry.resolveNpx : undefined,
